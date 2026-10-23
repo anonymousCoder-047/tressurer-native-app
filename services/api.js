@@ -10,7 +10,11 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  useLoadingStore.getState().start();
+  // `silent: true` opts background lookups (e.g. autocomplete) out of the
+  // global spinner and error toasts.
+  if (!config.silent) {
+    useLoadingStore.getState().start();
+  }
   const token = useAuthStore.getState().token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -20,11 +24,15 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => {
-    useLoadingStore.getState().stop();
+    if (!response.config.silent) {
+      useLoadingStore.getState().stop();
+    }
     return response;
   },
   (error) => {
-    useLoadingStore.getState().stop();
+    if (!error.config?.silent) {
+      useLoadingStore.getState().stop();
+    }
 
     const data = error.response?.data;
     const message =
@@ -35,7 +43,7 @@ api.interceptors.response.use(
 
     // 'Workspace not found' = selected workspace is stale/deleted — the
     // useWorkspace refresh silently re-syncs, so don't scare the user.
-    if (data?.error !== 'Workspace not found') {
+    if (!error.config?.silent && data?.error !== 'Workspace not found') {
       Toast.show({
         type: 'error',
         text1: 'Request failed',

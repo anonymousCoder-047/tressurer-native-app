@@ -5,7 +5,7 @@ import DateRangePicker from '@/components/DateRangePicker';
 import { useWorkspace } from '@/hooks/useWorkspace';
 import { getAuditLog } from '@/services/workspace';
 import { useTheme } from '@/hooks/useTheme';
-import { monthRange, prettyDate } from '@/utils/format';
+import { currencySymbol, monthRange, prettyDate } from '@/utils/format';
 
 // Audit trail timeline (admin only — enforced server-side too). Every row is
 // one audit_log entry: who did what, when, on which entity.
@@ -48,7 +48,7 @@ const detailLine = (e) => {
   const d = e.details ?? {};
   const bits = [];
   if (d.type) bits.push(d.type === 'income' ? 'received' : 'paid');
-  if (d.amount != null) bits.push(`₹${d.amount}`);
+  if (d.amount != null) bits.push(`${currencySymbol()}${d.amount}`);
   if (d.added != null) bits.push(`+${d.added} file${d.added === 1 ? '' : 's'}`);
   if (d.member_email) bits.push(d.member_email);
   if (d.name) bits.push(d.name);

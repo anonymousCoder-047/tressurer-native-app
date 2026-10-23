@@ -5,6 +5,18 @@ const TOKEN_KEY = 'tressurer.jwt';
 const USER_KEY = 'tressurer.user';
 const WORKSPACE_KEY = 'tressurer.workspace';
 
+// Dev-only shortcut: backend `npm run db:seed` prints EXPO_PUBLIC_DEV_TOKEN
+// (a JWT for the seeded local user) so a local backend can be used without
+// OAuth — Google's/Microsoft's callbacks only exist for production.
+const DEV_TOKEN = process.env.EXPO_PUBLIC_DEV_TOKEN || null;
+const decodeJwt = (token) => {
+  try {
+    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+  } catch {
+    return null;
+  }
+};
+
 export const useAuthStore = create((set) => ({
   token: null,
   user: null,
@@ -13,6 +25,18 @@ export const useAuthStore = create((set) => ({
 
   // Restore the persisted session on app start. Called once from the root layout.
   hydrate: async () => {
+    // A dev token overrides any stored session — it's for the local backend's
+    // seeded user, so previous sign-ins belong to a different database.
+    if (DEV_TOKEN) {
+      const p = decodeJwt(DEV_TOKEN);
+      set({
+        token: DEV_TOKEN,
+        user: p ? { id: p.sub, email: p.email, name: p.name } : null,
+        workspace: null,
+        isHydrated: true,
+      });
+      return;
+    }
     try {
       const [token, userJson, workspaceJson] = await Promise.all([
         secureStorage.get(TOKEN_KEY),

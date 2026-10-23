@@ -14,7 +14,7 @@ import ConfirmModal from '@/components/ConfirmModal';
 import { useAuthStore } from '@/store/useAuthStore';
 import { listTrash, purgeTrash, restoreTrash } from '@/services/workspace';
 import { useTheme } from '@/hooks/useTheme';
-import { fmtMoney, prettyDate } from '@/utils/format';
+import { fmtMoney, prettyDate, txLabel } from '@/utils/format';
 
 const daysLeft = (expires) =>
   Math.max(0, Math.ceil((new Date(expires) - Date.now()) / 86400000));
@@ -77,7 +77,7 @@ export default function TrashScreen() {
 
   const label = (item) => {
     const p = item.payload ?? {};
-    return p.description || p.category || 'Entry';
+    return txLabel(p) || 'Entry';
   };
 
   return (

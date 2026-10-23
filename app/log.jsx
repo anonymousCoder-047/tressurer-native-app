@@ -1,7 +1,8 @@
-import React, { useMemo, useEffect, useRef, useState } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -10,9 +11,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import Toast from 'react-native-toast-message';
 import DateField from '@/components/DateField';
 import OpenDayModal from '@/components/OpenDayModal';
@@ -48,10 +52,14 @@ export default function LogRecordScreen() {
   const [category, setCategory] = useState(params.category ?? '');
   const [received, setReceived] = useState(params.type === 'income' ? params.amount ?? '' : '');
   const [paid, setPaid] = useState(params.type === 'expense' ? params.amount ?? '' : '');
+  const [receivedFrom, setReceivedFrom] = useState(params.received_from ?? '');
+  const [paidTo, setPaidTo] = useState(params.paid_to ?? '');
   const [files, setFiles] = useState([]);
-  const [suggestions, setSuggestions] = useState([]);
+  const [descOptions, setDescOptions] = useState([]);
+  // 'select' shows past descriptions; 'custom' is free text. Edits start as custom.
+  const [descMode, setDescMode] = useState(params.description ? 'custom' : 'select');
+  const [descPicker, setDescPicker] = useState(false);
   const [busy, setBusy] = useState(false);
-  const debounce = useRef(null);
 
   // Admin edit mode: load the entry's existing proof attachments.
   useEffect(() => {
@@ -76,32 +84,58 @@ export default function LogRecordScreen() {
       .catch(() => setDayOpen('open'));
   }, [editingId, ready, workspace]);
 
-  // Autocomplete for repeated descriptions (debounced backend lookup).
+  // Past descriptions for the select — fetched once (empty q returns up to 10).
   useEffect(() => {
-    if (!workspace || description.trim().length < 2) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale suggestions
-      setSuggestions([]);
-      return;
+    if (!workspace) return;
+    getDescriptions(workspace.id, '')
+      .then(setDescOptions)
+      .catch(() => {});
+  }, [workspace]);
+
+  // Camera assets can arrive with fileSize: 0 or missing — stat the cached
+  // file. Returns null when the size can't be determined (never returns 0,
+  // which would bypass the 5 MB gate and end in a server 413).
+  const sizeOf = async (uri, known) => {
+    if (known > 0) return known;
+    try {
+      const info = await FileSystem.getInfoAsync(uri, { size: true });
+      return info.exists && info.size > 0 ? info.size : null;
+    } catch {
+      return null;
     }
-    clearTimeout(debounce.current);
-    debounce.current = setTimeout(async () => {
-      try {
-        setSuggestions(await getDescriptions(workspace.id, description.trim()));
-      } catch {
-        setSuggestions([]);
-      }
-    }, 250);
-    return () => clearTimeout(debounce.current);
-  }, [description, workspace]);
+  };
+
+  // Downscale an oversized image to a JPEG instead of rejecting it.
+  const compressImage = async (uri, name) => {
+    const ctx = ImageManipulator.manipulate(uri);
+    ctx.resize({ width: 2048 });
+    const img = await ctx.renderAsync();
+    const out = await img.saveAsync({ compress: 0.7, format: SaveFormat.JPEG });
+    return { uri: out.uri, name: `${name?.replace(/\.[^.]+$/, '') || 'photo'}.jpg`, type: 'image/jpeg' };
+  };
 
   // Appends an attachment after the 5 MB per-file check. `size` comes from
-  // ImagePicker.fileSize / DocumentPicker.size; unknown sizes pass through and
-  // the server enforces the cap.
-  const addFile = ({ uri, name, type, size }) => {
-    if (size && size > MAX_FILE_BYTES) {
+  // ImagePicker.fileSize / DocumentPicker.size and is stat'd when missing —
+  // unknown sizes are compressed anyway so a 413 can't slip through.
+  const addFile = async ({ uri, name, type, size }) => {
+    let file = { uri, name, type };
+    let bytes = await sizeOf(uri, size);
+    if (type?.startsWith('image/') && (bytes === null || bytes > MAX_FILE_BYTES)) {
+      try {
+        file = await compressImage(uri, name);
+        bytes = await sizeOf(file.uri);
+      } catch {
+        // Unverifiable size + failed compression would end in a raw 413.
+        if (bytes === null) {
+          return Toast.show({ type: 'error', text1: `Couldn't compress "${name}" — pick a smaller file` });
+        }
+        // known size — the check below reports if it's over the limit
+      }
+    }
+    if (bytes !== null && bytes > MAX_FILE_BYTES) {
       return Toast.show({ type: 'error', text1: `"${name}" is over 5 MB — pick a smaller file` });
     }
-    setFiles((f) => (f.some((x) => x.uri === uri) ? f : [...f, { uri, name, type, size: size ?? 0 }]));
+    setFiles((f) => (f.some((x) => x.uri === file.uri) ? f : [...f, { ...file, size: bytes }]));
   };
 
   const pickImage = async () => {
@@ -112,7 +146,7 @@ export default function LogRecordScreen() {
     });
     if (!res.canceled) {
       for (const a of res.assets ?? []) {
-        addFile({ uri: a.uri, name: a.fileName ?? `photo-${Date.now()}.jpg`, type: a.mimeType ?? 'image/jpeg', size: a.fileSize });
+        await addFile({ uri: a.uri, name: a.fileName ?? `photo-${Date.now()}.jpg`, type: a.mimeType ?? 'image/jpeg', size: a.fileSize });
       }
     }
   };
@@ -125,7 +159,7 @@ export default function LogRecordScreen() {
     const res = await ImagePicker.launchCameraAsync({ quality: 0.8 });
     if (!res.canceled && res.assets?.[0]) {
       const a = res.assets[0];
-      addFile({ uri: a.uri, name: a.fileName ?? `photo-${Date.now()}.jpg`, type: a.mimeType ?? 'image/jpeg', size: a.fileSize });
+      await addFile({ uri: a.uri, name: a.fileName ?? `photo-${Date.now()}.jpg`, type: a.mimeType ?? 'image/jpeg', size: a.fileSize });
     }
   };
 
@@ -137,7 +171,7 @@ export default function LogRecordScreen() {
     });
     if (!res.canceled) {
       for (const a of res.assets ?? []) {
-        addFile({ uri: a.uri, name: a.name, type: a.mimeType ?? 'application/octet-stream', size: a.size });
+        await addFile({ uri: a.uri, name: a.name, type: a.mimeType ?? 'application/octet-stream', size: a.size });
       }
     }
   };
@@ -171,6 +205,8 @@ export default function LogRecordScreen() {
       if (editingId) {
         const res = await updateTransaction(workspace.id, editingId, {
           type, amount, description: description.trim() || null, category: category.trim() || null,
+          received_from: receivedFrom.trim() || null,
+          paid_to: paidTo.trim() || null,
         });
         // Admin-only: newly picked files are appended as proofs.
         if (files.length && isAdmin) {
@@ -189,12 +225,16 @@ export default function LogRecordScreen() {
                 received: receivedNum, paid: paidNum,
                 description: description.trim() || null,
                 category: category.trim() || null,
+                received_from: receivedFrom.trim() || null,
+                paid_to: paidTo.trim() || null,
                 date, files,
               }
             : {
                 type, amount,
                 description: description.trim() || null,
                 category: category.trim() || null,
+                received_from: type === 'income' ? receivedFrom.trim() || null : null,
+                paid_to: type === 'expense' ? paidTo.trim() || null : null,
                 date, files,
               }
         );
@@ -259,26 +299,37 @@ export default function LogRecordScreen() {
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.label}>Date</Text>
+        <Text style={styles.hint}>The business day this entry belongs to.</Text>
         <DateField value={date} onChange={setDate} disabled={!!editingId} />
 
         <Text style={styles.label}>Description</Text>
-        <TextInput
-          style={styles.input}
-          value={description}
-          onChangeText={setDescription}
-          placeholder="e.g. Office supplies"
-        />
-        {suggestions.length > 0 && (
-          <View style={styles.suggestions}>
-            {suggestions.map((s) => (
-              <Pressable key={s} style={styles.suggestion} onPress={() => { setDescription(s); setSuggestions([]); }}>
-                <Text style={styles.suggestionText}>{s}</Text>
-              </Pressable>
-            ))}
+        <Text style={styles.hint}>What this entry is for — pick a past description or write a custom note.</Text>
+        {descMode === 'select' ? (
+          <Pressable style={styles.fieldRow} onPress={() => setDescPicker(true)}>
+            <Text style={[styles.fieldText, !description && styles.placeholder]}>
+              {description || 'Select description'}
+            </Text>
+            <Ionicons name="chevron-down" size={18} color={t.colors.textMuted} />
+            <Pressable onPress={() => setDescMode('custom')} hitSlop={8}>
+              <Ionicons name="create-outline" size={20} color={t.colors.primary} />
+            </Pressable>
+          </Pressable>
+        ) : (
+          <View style={styles.fieldRow}>
+            <TextInput
+              style={styles.fieldInput}
+              value={description}
+              onChangeText={setDescription}
+              placeholder="e.g. Office supplies"
+            />
+            <Pressable onPress={() => setDescMode('select')} hitSlop={8}>
+              <Ionicons name="list-outline" size={20} color={t.colors.primary} />
+            </Pressable>
           </View>
         )}
 
         <Text style={styles.label}>Category (optional)</Text>
+        <Text style={styles.hint}>A group for this entry — e.g. Supplies, Salary, Rent.</Text>
         <TextInput
           style={styles.input}
           value={category}
@@ -289,6 +340,7 @@ export default function LogRecordScreen() {
         <View style={styles.amountRow}>
           <View style={styles.amountCol}>
             <Text style={styles.label}>Amount received</Text>
+            <Text style={styles.hint}>Money coming in.</Text>
             <TextInput
               style={[styles.input, styles.received]}
               value={received}
@@ -296,9 +348,18 @@ export default function LogRecordScreen() {
               keyboardType="decimal-pad"
               placeholder="0.00"
             />
+            {parseFloat(received) > 0 && (
+              <TextInput
+                style={[styles.input, styles.partyInput]}
+                value={receivedFrom}
+                onChangeText={setReceivedFrom}
+                placeholder="Received from"
+              />
+            )}
           </View>
           <View style={styles.amountCol}>
             <Text style={styles.label}>Amount paid</Text>
+            <Text style={styles.hint}>Money going out.</Text>
             <TextInput
               style={[styles.input, styles.paid]}
               value={paid}
@@ -306,6 +367,14 @@ export default function LogRecordScreen() {
               keyboardType="decimal-pad"
               placeholder="0.00"
             />
+            {parseFloat(paid) > 0 && (
+              <TextInput
+                style={[styles.input, styles.partyInput]}
+                value={paidTo}
+                onChangeText={setPaidTo}
+                placeholder="Paid to"
+              />
+            )}
           </View>
         </View>
 
@@ -370,6 +439,30 @@ export default function LogRecordScreen() {
         </Pressable>
       </ScrollView>
 
+      <Modal visible={descPicker} transparent animationType="fade" onRequestClose={() => setDescPicker(false)}>
+        <View style={styles.pickerBackdrop}>
+          <View style={styles.pickerCard}>
+            <Text style={styles.pickerTitle}>Description</Text>
+            <ScrollView>
+              <Pressable
+                style={styles.pickerRow}
+                onPress={() => { setDescMode('custom'); setDescPicker(false); }}>
+                <Ionicons name="create-outline" size={18} color={t.colors.primary} />
+                <Text style={styles.pickerCustomText}>Custom entry</Text>
+              </Pressable>
+              {descOptions.map((s) => (
+                <Pressable
+                  key={s}
+                  style={styles.pickerRow}
+                  onPress={() => { setDescription(s); setDescPicker(false); }}>
+                  <Text style={styles.pickerRowText}>{s}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <ConfirmModal
         visible={!!confirmRmProof}
         title="Remove proof?"
@@ -423,19 +516,49 @@ const makeStyles = (t) => StyleSheet.create({
     backgroundColor: t.colors.background,
   },
   inputDisabled: { backgroundColor: t.colors.surface, color: t.colors.textMuted },
-  suggestions: {
+  fieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: t.spacing(3),
     borderWidth: 1,
     borderColor: t.colors.border,
     borderRadius: t.radius.md,
-    marginTop: t.spacing(1),
-    overflow: 'hidden',
+    paddingHorizontal: t.spacing(3),
+    backgroundColor: t.colors.background,
   },
-  suggestion: { padding: t.spacing(3), borderBottomWidth: 1, borderBottomColor: t.colors.border },
-  suggestionText: { color: t.colors.text },
+  fieldText: { flex: 1, fontSize: 16, color: t.colors.text, paddingVertical: t.spacing(3) },
+  fieldInput: { flex: 1, fontSize: 16, color: t.colors.text, paddingVertical: t.spacing(3) },
+  placeholder: { color: t.colors.textMuted },
+  pickerBackdrop: {
+    flex: 1,
+    backgroundColor: t.colors.overlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: t.spacing(6),
+  },
+  pickerCard: {
+    alignSelf: 'stretch',
+    backgroundColor: t.colors.background,
+    borderRadius: t.radius.lg,
+    padding: t.spacing(4),
+    maxHeight: '70%',
+  },
+  pickerTitle: { fontSize: 16, fontWeight: '700', color: t.colors.text, marginBottom: t.spacing(2) },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: t.spacing(3),
+    paddingVertical: t.spacing(3),
+    borderBottomWidth: 1,
+    borderBottomColor: t.colors.border,
+  },
+  pickerRowText: { fontSize: 15, color: t.colors.text },
+  pickerCustomText: { fontSize: 15, color: t.colors.primary, fontWeight: '600' },
   amountRow: { flexDirection: 'row', gap: t.spacing(3) },
   amountCol: { flex: 1 },
   received: { borderColor: '#16A34A' },
   paid: { borderColor: t.colors.danger },
+  partyInput: { marginTop: t.spacing(2), fontSize: 14 },
   attachRow: { flexDirection: 'row', gap: t.spacing(3) },
   attachBtn: {
     borderWidth: 1,

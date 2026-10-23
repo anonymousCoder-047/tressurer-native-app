@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '@/hooks/useTheme';
-import { fmtMoney, prettyDate } from '@/utils/format';
+import { fmtNumber, prettyDate, txLabel } from '@/utils/format';
 
 // One row in a transaction list. Received (income) shows green +, Paid red −.
 export default function TransactionRow({ item, showDate }) {
@@ -12,7 +12,7 @@ export default function TransactionRow({ item, showDate }) {
     <View style={styles.row}>
       <View style={styles.left}>
         <Text style={styles.description} numberOfLines={1}>
-          {item.description || item.category || '(no description)'}
+          {txLabel(item) || '(no description)'}
         </Text>
         <Text style={styles.meta}>
           {showDate && item.business_date ? `${prettyDate(item.business_date)} · ` : ''}
@@ -20,9 +20,8 @@ export default function TransactionRow({ item, showDate }) {
           {item.proof_file_path ? ' · proof' : ''}
         </Text>
       </View>
-      <Text style={[styles.amount, { color: income ? '#16A34A' : t.colors.danger }]}>
-        {income ? '+' : '−'}
-        {fmtMoney(item.amount)}
+      <Text style={[styles.amount, { color: income ? '#16A34A' : t.colors.danger }]} numberOfLines={1}>
+        {fmtNumber(item.amount)}
       </Text>
     </View>
   );

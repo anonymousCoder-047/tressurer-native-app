@@ -134,6 +134,13 @@ export default function TransactionViewModal({ visible, item, workspaceId, onClo
             <View style={styles.meta}>
               <Text style={styles.metaRow}><Text style={styles.metaLabel}>Date</Text>  {prettyDate(item.business_date ?? item.created_at)}</Text>
               <Text style={styles.metaRow}><Text style={styles.metaLabel}>Type</Text>  {income ? 'Received' : 'Paid'}</Text>
+              {income && !!item.received_from && (
+                <Text style={styles.metaRow}><Text style={styles.metaLabel}>Received from</Text>  {item.received_from}</Text>
+              )}
+              {!income && !!item.paid_to && (
+                <Text style={styles.metaRow}><Text style={styles.metaLabel}>Paid to</Text>  {item.paid_to}</Text>
+              )}
+              {!!item.description && <Text style={styles.metaRow}><Text style={styles.metaLabel}>Description</Text>  {item.description}</Text>}
               {!!item.category && <Text style={styles.metaRow}><Text style={styles.metaLabel}>Category</Text>  {item.category}</Text>}
               {!!item.created_by_name && <Text style={styles.metaRow}><Text style={styles.metaLabel}>By</Text>  {item.created_by_name}</Text>}
             </View>

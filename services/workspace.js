@@ -9,6 +9,12 @@ export const listWorkspaces = () =>
 export const createWorkspace = (name) =>
   api.post('/workspaces', { name }).then((r) => r.data.workspace);
 
+export const renameWorkspace = (workspaceId, name) =>
+  api.patch(`/workspaces/${workspaceId}`, { name }).then((r) => r.data.workspace);
+
+export const wipeWorkspaceData = (workspaceId) =>
+  api.delete(`/workspaces/${workspaceId}/data`).then((r) => r.data);
+
 export const deleteWorkspace = (workspaceId) =>
   api.delete(`/workspaces/${workspaceId}`);
 
@@ -30,6 +36,18 @@ export const openDay = (workspaceId, openingBalance) =>
     .post(`/workspaces/${workspaceId}/summaries/open`, { opening_balance: openingBalance })
     .then((r) => r.data.summary);
 
+// Any opened day's summary (null when the day was never opened).
+export const getDaySummary = (workspaceId, date) =>
+  api
+    .get(`/workspaces/${workspaceId}/transactions`, { params: { date } })
+    .then((r) => r.data.summary);
+
+// Admin — patch: { opening_balance?, closing_balance? } (unchanged keys omitted).
+export const updateSummary = (workspaceId, date, patch) =>
+  api
+    .patch(`/workspaces/${workspaceId}/summaries/${date}`, patch)
+    .then((r) => r.data.summary);
+
 // ---- transactions ---------------------------------------------------------
 // params: { date } for one day, or { from, to } for a range.
 export const getTransactions = (workspaceId, params) =>
@@ -37,14 +55,14 @@ export const getTransactions = (workspaceId, params) =>
 
 export const getDescriptions = (workspaceId, q) =>
   api
-    .get(`/workspaces/${workspaceId}/transactions/descriptions`, { params: { q } })
+    .get(`/workspaces/${workspaceId}/transactions/descriptions`, { params: { q }, silent: true })
     .then((r) => r.data.descriptions);
 
 // files: [{ uri, name, type }] from ImagePicker/DocumentPicker — each appended
 // as a 'proof' field (≤5 MB each, ≤25 MB total, enforced server-side too).
 // files: [{ uri, name, type }] — each appended as a 'proof' field.
 // Either {type, amount} or {received, paid} (both >0 → combined entry).
-export const createTransaction = (workspaceId, { type, amount, received, paid, category, description, date, files }) => {
+export const createTransaction = (workspaceId, { type, amount, received, paid, category, description, received_from, paid_to, date, files }) => {
   const form = new FormData();
   if (received != null && paid != null) {
     form.append('received', String(received));
@@ -56,6 +74,8 @@ export const createTransaction = (workspaceId, { type, amount, received, paid, c
   if (date) form.append('date', date);
   if (category) form.append('category', category);
   if (description) form.append('description', description);
+  if (received_from) form.append('received_from', received_from);
+  if (paid_to) form.append('paid_to', paid_to);
   for (const f of files ?? []) {
     form.append('proof', { uri: f.uri, name: f.name, type: f.type });
   }

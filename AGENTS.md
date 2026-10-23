@@ -34,6 +34,11 @@ Run lint and typecheck before declaring any task done.
 Use EAS to build, sign, and submit the app in the cloud (`eas build`, `eas submit`) and to ship over-the-air updates (`eas update`) — no local Xcode or Android Studio required. Run EAS CLI as `bunx eas-cli <command>` in Bun projects, or `npx eas-cli@latest <command>` otherwise; substitute that for bare `eas` in docs examples.
 Docs: https://docs.expo.dev/eas/index.md
 
+## Release signing
+
+- Upload keystore + `keystore.properties` live in `mobile/keystore/` (outside `android/`, gitignored). Back both up outside the repo.
+- `expo prebuild` wipes `android/` — after running it, re-apply the release `signingConfigs`/`keystore.properties` block in `android/app/build.gradle` (search for "keystore" there) and verify `android.enableMinifyInReleaseBuilds` survived (it comes from `expo-build-properties` in `app.json`).
+
 ## Rules
 
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.

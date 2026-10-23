@@ -17,10 +17,11 @@ import ConfirmModal from '@/components/ConfirmModal';
 import DateRangePicker from '@/components/DateRangePicker';
 import ExportMenu from '@/components/ExportMenu';
 import OpenDayModal from '@/components/OpenDayModal';
+import ReportPreviewModal from '@/components/ReportPreviewModal';
 import TransactionRow from '@/components/TransactionRow';
 import TransactionViewModal from '@/components/TransactionViewModal';
 import { useWorkspace } from '@/hooks/useWorkspace';
-import { reportAsText, shareCSV, shareReportPDF, shareTextWhatsApp, shareXLSX } from '@/services/export';
+import { reportAsText, reportHtml, shareCSV, shareReportPDF, shareTextWhatsApp, shareXLSX } from '@/services/export';
 import {
   deleteTransaction,
   emailReport,
@@ -30,11 +31,14 @@ import {
 } from '@/services/workspace';
 import { useTheme } from '@/hooks/useTheme';
 import {
+  currencySymbol,
   fmtMoney,
+  fmtNumber,
   monthRange,
   prettyDate,
   shiftDay,
   todayISO,
+  txLabel,
 } from '@/utils/format';
 
 const datePart = (iso) => String(iso ?? '').slice(0, 10);
@@ -57,6 +61,7 @@ export default function AuditBookScreen() {
   const [confirmDel, setConfirmDel] = useState(null); // transaction pending delete
   const [delBusy, setDelBusy] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState(null); // non-null → preview modal open
   const [emailTo, setEmailTo] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -166,6 +171,8 @@ export default function AuditBookScreen() {
         amount: String(item.amount),
         description: item.description ?? '',
         category: item.category ?? '',
+        received_from: item.received_from ?? '',
+        paid_to: item.paid_to ?? '',
         hasProof: item.proof_file_path ? '1' : '0',
       },
     });
@@ -190,10 +197,10 @@ export default function AuditBookScreen() {
     if (kind === 'email') return setEmailTo('');
     await new Promise((r) => setTimeout(r, 350)); // let the sheet unmount first
     const aoa = [
-      ['Date', 'Description', 'Category', 'Type', 'Amount', 'Recorded by'],
+      ['Date', 'Description', 'Category', 'Type', `Amount (${currencySymbol()})`, 'Recorded by'],
       ...sections.flatMap((s) =>
         s.transactions.map((t) => [
-          s.date, t.description ?? '', t.category ?? '', t.type,
+          prettyDate(s.date), txLabel(t), t.category ?? '', t.type,
           Number(t.amount), t.created_by_name ?? '',
         ])
       ),
@@ -203,14 +210,16 @@ export default function AuditBookScreen() {
     try {
       if (kind === 'csv') await shareCSV(`${base}.csv`, aoa[0], aoa.slice(1));
       else if (kind === 'xlsx') await shareXLSX(`${base}.xlsx`, 'Audit Book', aoa);
-      else if (kind === 'pdf') {
+      else if (kind === 'pdf' || kind === 'preview') {
         const [rpt] = await Promise.all([getReport(workspace.id, range)]);
-        await shareReportPDF(`${base}.pdf`, {
+        const payload = {
           title: `${workspace.name} — Audit Book`,
-          subtitle: `${range.from} → ${range.to}`,
+          subtitle: `${prettyDate(range.from)} → ${prettyDate(range.to)}`,
           totals: rpt.totals,
-          days: (rpt.days ?? []).map((d) => ({ ...d, date: prettyDate(d.business_date) })),
-        });
+          transactions: sections.flatMap((s) => s.transactions),
+        };
+        if (kind === 'pdf') await shareReportPDF(`${base}.pdf`, payload);
+        else setPreviewHtml(reportHtml(payload));
       } else if (kind === 'whatsapp') {
         const rpt = await getReport(workspace.id, range);
         await shareTextWhatsApp(
@@ -383,18 +392,24 @@ export default function AuditBookScreen() {
               <View style={styles.jHead}>
                 <Text style={[styles.jCell, styles.jDate, styles.jHeadText]}>Date</Text>
                 <Text style={[styles.jCell, styles.jPart, styles.jHeadText]}>Particulars</Text>
-                <Text style={[styles.jCell, styles.jAmt, styles.jHeadText, { color: '#16A34A' }]}>Debit</Text>
-                <Text style={[styles.jCell, styles.jAmt, styles.jHeadText, { color: t.colors.danger }]}>Credit</Text>
+                <Text style={[styles.jCell, styles.jDesc, styles.jHeadText]}>Description</Text>
+                <Text style={[styles.jCell, styles.jAmt, styles.jHeadText, { color: '#16A34A' }]}>
+                  Debit ({currencySymbol()})
+                </Text>
+                <Text style={[styles.jCell, styles.jAmt, styles.jHeadText, { color: t.colors.danger }]}>
+                  Credit ({currencySymbol()})
+                </Text>
               </View>
               {jMeta.opening !== null && (
                 <View style={[styles.jRow, styles.jBalanceRow]}>
                   <Text style={[styles.jCell, styles.jDate]}>{prettyDate(range.from)}</Text>
                   <Text style={[styles.jCell, styles.jPart, styles.jBalanceText]}>Opening balance b/d</Text>
+                  <Text style={[styles.jCell, styles.jDesc]} />
                   <View style={[styles.jCell, styles.jAmt]}>
-                    {jOpen >= 0 && <Text style={styles.jBalanceAmt}>{fmtMoney(jOpen)}</Text>}
+                    {jOpen >= 0 && <Text style={styles.jBalanceAmt} numberOfLines={1}>{fmtNumber(jOpen)}</Text>}
                   </View>
                   <View style={[styles.jCell, styles.jAmt]}>
-                    {jOpen < 0 && <Text style={styles.jBalanceAmt}>{fmtMoney(-jOpen)}</Text>}
+                    {jOpen < 0 && <Text style={styles.jBalanceAmt} numberOfLines={1}>{fmtNumber(-jOpen)}</Text>}
                   </View>
                 </View>
               )}
@@ -413,16 +428,16 @@ export default function AuditBookScreen() {
                   <Text style={[styles.jLine, styles.jCr, !income && styles.jCrLine]}>
                     {income ? `To ${acct} A/c` : 'To Cash A/c'}
                   </Text>
-                  {!!item.description && <Text style={styles.jNarr}>({item.description})</Text>}
                 </View>
+                <Text style={[styles.jCell, styles.jDesc]} numberOfLines={3}>{txLabel(item)}</Text>
                 <View style={[styles.jCell, styles.jAmt]}>
                   {income && (
-                    <Text style={[styles.jLine, styles.jAmtIn]}>+{fmtMoney(item.amount)}</Text>
+                    <Text style={[styles.jLine, styles.jAmtIn]} numberOfLines={1}>{fmtNumber(item.amount)}</Text>
                   )}
                 </View>
                 <View style={[styles.jCell, styles.jAmt]}>
                   {!income && (
-                    <Text style={[styles.jLine, styles.jAmtOut]}>−{fmtMoney(item.amount)}</Text>
+                    <Text style={[styles.jLine, styles.jAmtOut]} numberOfLines={1}>{fmtNumber(item.amount)}</Text>
                   )}
                 </View>
               </View>
@@ -435,33 +450,37 @@ export default function AuditBookScreen() {
                   <View style={[styles.jRow, styles.jBalanceRow]}>
                     <Text style={[styles.jCell, styles.jDate]}>{prettyDate(range.to)}</Text>
                     <Text style={[styles.jCell, styles.jPart, styles.jBalanceText]}>Closing balance c/d</Text>
+                    <Text style={[styles.jCell, styles.jDesc]} />
                     <View style={[styles.jCell, styles.jAmt]}>
-                      {jClose < 0 && <Text style={styles.jBalanceAmt}>{fmtMoney(-jClose)}</Text>}
+                      {jClose < 0 && <Text style={styles.jBalanceAmt} numberOfLines={1}>{fmtNumber(-jClose)}</Text>}
                     </View>
                     <View style={[styles.jCell, styles.jAmt]}>
-                      {jClose >= 0 && <Text style={styles.jBalanceAmt}>{fmtMoney(jClose)}</Text>}
+                      {jClose >= 0 && <Text style={styles.jBalanceAmt} numberOfLines={1}>{fmtNumber(jClose)}</Text>}
                     </View>
                   </View>
                 )}
                 <View style={[styles.jRow, styles.jTotalRow]}>
                   <Text style={[styles.jCell, styles.jDate]} />
                   <Text style={[styles.jCell, styles.jPart, styles.jTotalText]}>TOTAL</Text>
-                  <Text style={[styles.jCell, styles.jAmt, styles.jTotalText, { color: '#16A34A' }]}>
-                    {fmtMoney(jDrTotal)}
+                  <Text style={[styles.jCell, styles.jDesc]} />
+                  <Text style={[styles.jCell, styles.jAmt, styles.jTotalText, { color: '#16A34A' }]} numberOfLines={1}>
+                    {fmtNumber(jDrTotal)}
                   </Text>
-                  <Text style={[styles.jCell, styles.jAmt, styles.jTotalText, { color: t.colors.danger }]}>
-                    {fmtMoney(jCrTotal)}
+                  <Text style={[styles.jCell, styles.jAmt, styles.jTotalText, { color: t.colors.danger }]} numberOfLines={1}>
+                    {fmtNumber(jCrTotal)}
                   </Text>
                 </View>
                 <View style={styles.jRow}>
                   <Text style={[styles.jCell, styles.jDate]} />
                   <Text style={[styles.jCell, styles.jPart, styles.jTotalText]}>NET</Text>
+                  <Text style={[styles.jCell, styles.jDesc]} />
                   <Text
                     style={[
                       styles.jCell, styles.jAmt, styles.jTotalText,
                       { color: journalDebit - journalCredit >= 0 ? '#16A34A' : t.colors.danger },
-                    ]}>
-                    {fmtMoney(journalDebit - journalCredit)}
+                    ]}
+                    numberOfLines={1}>
+                    {fmtNumber(journalDebit - journalCredit)}
                   </Text>
                   <Text style={[styles.jCell, styles.jAmt]} />
                 </View>
@@ -534,6 +553,12 @@ export default function AuditBookScreen() {
         onClose={() => setExportOpen(false)}
         onPick={doExport}
         showEmail={workspace.role === 'admin'}
+      />
+
+      <ReportPreviewModal
+        visible={previewHtml !== null}
+        html={previewHtml ?? ''}
+        onClose={() => setPreviewHtml(null)}
       />
 
       {/* Email report prompt */}
@@ -661,7 +686,8 @@ const makeStyles = (t) => StyleSheet.create({
   jCell: { paddingRight: t.spacing(2) },
   jDate: { width: 86 },
   jPart: { flex: 1 },
-  jAmt: { width: 82, alignItems: 'center', textAlign: 'center' },
+  jDesc: { flex: 0.9, fontSize: 11, color: t.colors.textMuted },
+  jAmt: { width: 100, alignItems: 'center', textAlign: 'center' },
   jLine: { fontSize: 12, color: t.colors.text, lineHeight: 17 },
   jDr: { fontWeight: '700', color: t.colors.textMuted, fontSize: 10 },
   jDrLine: { color: '#16A34A' },
@@ -669,7 +695,6 @@ const makeStyles = (t) => StyleSheet.create({
   jCrLine: { color: t.colors.danger },
   jAmtIn: { color: '#16A34A', fontWeight: '700' },
   jAmtOut: { color: t.colors.danger, fontWeight: '700' },
-  jNarr: { fontSize: 11, fontStyle: 'italic', color: t.colors.textMuted, marginTop: 2 },
   jTotalRow: { borderTopWidth: 2, borderTopColor: t.colors.border, backgroundColor: t.colors.surface },
   jTotalText: { fontSize: 12, fontWeight: '800', color: t.colors.text, lineHeight: 17 },
   jBalanceRow: { backgroundColor: t.colors.surface },

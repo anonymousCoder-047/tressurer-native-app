@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import Toast from 'react-native-toast-message';
+import DateField from '@/components/DateField';
+import ConfirmModal from '@/components/ConfirmModal';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSettingsStore, CURRENCIES, currencyMeta } from '@/store/useSettingsStore';
 import { updateProfile } from '@/services/auth';
@@ -20,14 +22,18 @@ import {
   addMember,
   approveRequest,
   deleteWorkspace,
+  getDaySummary,
   listApprovals,
   listMembers,
   rejectRequest,
   removeMember,
+  renameWorkspace,
+  updateSummary,
+  wipeWorkspaceData,
 } from '@/services/workspace';
 import { useTheme } from '@/hooks/useTheme';
 import { avatarUri } from '@/constants/config';
-import { fmtMoney } from '@/utils/format';
+import { fmtMoney, prettyDate, todayISO } from '@/utils/format';
 
 const describeApproval = (a) => {
   if (a.action === 'delete') {
@@ -68,6 +74,15 @@ export default function SettingsScreen() {
   const [curSymbol, setCurSymbol] = useState('');
   const [confirmMember, setConfirmMember] = useState(null); // member pending removal
   const [busyKey, setBusyKey] = useState(null);
+  const [renameWs, setRenameWs] = useState(false);
+  const [wsName, setWsName] = useState('');
+  const [confirmWipe, setConfirmWipe] = useState(false);
+  // Daily balances (admin): pick a date, view/edit its opening & closing.
+  const [balanceDate, setBalanceDate] = useState(todayISO());
+  const [daySummary, setDaySummary] = useState(null);
+  const [editBalances, setEditBalances] = useState(false);
+  const [editOpening, setEditOpening] = useState('');
+  const [editClosing, setEditClosing] = useState('');
 
   const load = useCallback(async () => {
     if (!ready || !workspace) return;
@@ -84,6 +99,17 @@ export default function SettingsScreen() {
       load();
     }, [load])
   );
+
+  useEffect(() => {
+    if (!workspace || !isAdmin) return;
+    let alive = true;
+    getDaySummary(workspace.id, balanceDate)
+      .then((s) => alive && setDaySummary(s))
+      .catch(() => alive && setDaySummary(null));
+    return () => {
+      alive = false;
+    };
+  }, [workspace, isAdmin, balanceDate]);
 
   const act = async (key, fn, toast) => {
     setBusyKey(key);
@@ -103,6 +129,21 @@ export default function SettingsScreen() {
       await addMember(workspace.id, inviteEmail.trim(), inviteRole);
       setInviteEmail('');
     }, 'Member added');
+
+  const onRenameWorkspace = () =>
+    act('renameWs', async () => {
+      const updated = await renameWorkspace(workspace.id, wsName.trim());
+      await setWorkspace(updated);
+      setRenameWs(false);
+    }, 'Workspace renamed');
+
+  const onWipeData = () =>
+    act('wipe', async () => {
+      const { deleted } = await wipeWorkspaceData(workspace.id);
+      setConfirmWipe(false);
+      setDaySummary(null);
+      Toast.show({ type: 'success', text1: `All data deleted (${deleted?.transactions ?? 0} entries)` });
+    });
 
   const onDeleteWorkspace = () =>
     act('deleteWs', async () => {
@@ -124,6 +165,23 @@ export default function SettingsScreen() {
       await setUser(updated);
       setEditProfile(false);
     }, 'Profile updated');
+
+  // Only changed fields go to the server — an untouched prefill isn't an edit.
+  const onSaveBalances = () => {
+    const patch = {};
+    const o = editOpening.trim();
+    const c = editClosing.trim();
+    if (o !== '' && Number(o) !== Number(daySummary.opening_balance)) patch.opening_balance = Number(o);
+    if (c !== '' && Number(c) !== Number(daySummary.closing_balance)) patch.closing_balance = Number(c);
+    if (!Object.keys(patch).length) return setEditBalances(false);
+    if ([patch.opening_balance, patch.closing_balance].some((v) => v != null && (!isFinite(v) || v < 0))) {
+      return Toast.show({ type: 'error', text1: 'Balances must be non-negative numbers' });
+    }
+    act('balances', async () => {
+      setDaySummary(await updateSummary(workspace.id, balanceDate, patch));
+      setEditBalances(false);
+    }, 'Balances updated');
+  };
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -205,9 +263,21 @@ export default function SettingsScreen() {
             <Text style={styles.name}>{workspace?.name ?? 'None selected'}</Text>
             {workspace && <Text style={styles.muted}>Your role: {workspace.role}</Text>}
           </View>
-          <Pressable style={styles.linkBtn} onPress={() => router.push('/workspaces')}>
-            <Text style={styles.link}>{workspace ? 'Manage' : 'Choose'}</Text>
-          </Pressable>
+          <View style={styles.memberActions}>
+            {isAdmin && (
+              <Pressable
+                style={styles.linkBtn}
+                onPress={() => {
+                  setWsName(workspace?.name ?? '');
+                  setRenameWs(true);
+                }}>
+                <Text style={styles.link}>Rename</Text>
+              </Pressable>
+            )}
+            <Pressable style={styles.linkBtn} onPress={() => router.push('/workspaces')}>
+              <Text style={styles.link}>{workspace ? 'Manage' : 'Choose'}</Text>
+            </Pressable>
+          </View>
         </View>
         {isAdmin && (
           <View style={styles.workspaceLinks}>
@@ -226,6 +296,42 @@ export default function SettingsScreen() {
 
       {workspace && (
         <>
+          {/* ---- Daily balances (admin) ---- */}
+          {isAdmin && (
+            <>
+              <Text style={styles.section}>Daily balances</Text>
+              <View style={styles.card}>
+                <Text style={styles.label}>Day</Text>
+                <DateField value={balanceDate} onChange={setBalanceDate} />
+                {daySummary ? (
+                  <>
+                    <View style={styles.balanceRow}>
+                      <Text style={styles.muted}>Opening balance</Text>
+                      <Text style={styles.balanceValue}>{fmtMoney(daySummary.opening_balance)}</Text>
+                    </View>
+                    <View style={styles.balanceRow}>
+                      <Text style={styles.muted}>Closing balance</Text>
+                      <Text style={styles.balanceValue}>{fmtMoney(daySummary.closing_balance)}</Text>
+                    </View>
+                    <Pressable
+                      style={styles.linkBtn}
+                      onPress={() => {
+                        setEditOpening(String(daySummary.opening_balance ?? ''));
+                        setEditClosing(String(daySummary.closing_balance ?? ''));
+                        setEditBalances(true);
+                      }}>
+                      <Text style={styles.link}>Edit balances</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <Text style={[styles.muted, { marginTop: t.spacing(3) }]}>
+                    This day isn&rsquo;t opened yet — log its first entry to record a balance.
+                  </Text>
+                )}
+              </View>
+            </>
+          )}
+
           {/* ---- Members ---- */}
           <Text style={styles.section}>Members</Text>
           <View style={styles.card}>
@@ -321,9 +427,14 @@ export default function SettingsScreen() {
               {/* ---- Danger zone ---- */}
               <Text style={styles.section}>Danger zone</Text>
               <View style={[styles.card, styles.dangerCard]}>
-                <Pressable onPress={() => setConfirmDelete(true)}>
+                <Pressable onPress={() => setConfirmWipe(true)} hitSlop={4}>
+                  <Text style={styles.linkDanger}>Delete all data</Text>
+                </Pressable>
+                <Text style={styles.muted}>Wipes every entry, balance and proof — keeps members.</Text>
+                <Pressable style={{ marginTop: t.spacing(4) }} onPress={() => setConfirmDelete(true)}>
                   <Text style={styles.linkDanger}>Delete workspace “{workspace.name}”</Text>
                 </Pressable>
+                <Text style={styles.muted}>Removes the workspace, its members and everything in it.</Text>
               </View>
             </>
           )}
@@ -436,6 +547,95 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
+      {/* Edit daily balances modal */}
+      <Modal visible={editBalances} transparent animationType="fade" onRequestClose={() => setEditBalances(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Balances for {prettyDate(balanceDate)}</Text>
+            <Text style={styles.label}>Opening balance</Text>
+            <TextInput
+              style={styles.input}
+              value={editOpening}
+              onChangeText={setEditOpening}
+              placeholder="0.00"
+              keyboardType="decimal-pad"
+              autoFocus
+            />
+            <Text style={[styles.label, { marginTop: t.spacing(3) }]}>Closing balance</Text>
+            <TextInput
+              style={styles.input}
+              value={editClosing}
+              onChangeText={setEditClosing}
+              placeholder="0.00"
+              keyboardType="decimal-pad"
+            />
+            <Text style={styles.muted}>
+              Changing the opening balance recalculates closing from the day&rsquo;s entries.
+              A closing edit holds until the next entry changes it.
+            </Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.linkBtn} onPress={() => setEditBalances(false)}>
+                <Text style={styles.link}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.saveBtn}
+                onPress={onSaveBalances}
+                disabled={busyKey === 'balances' || (!editOpening.trim() && !editClosing.trim())}>
+                {busyKey === 'balances' ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.saveBtnText}>Save</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rename workspace modal */}
+      <Modal visible={renameWs} transparent animationType="fade" onRequestClose={() => setRenameWs(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Rename workspace</Text>
+            <Text style={styles.label}>Workspace name</Text>
+            <TextInput
+              style={styles.input}
+              value={wsName}
+              onChangeText={setWsName}
+              placeholder="Workspace name"
+              autoFocus
+              maxLength={120}
+            />
+            <View style={styles.modalActions}>
+              <Pressable style={styles.linkBtn} onPress={() => setRenameWs(false)}>
+                <Text style={styles.link}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.saveBtn}
+                onPress={onRenameWorkspace}
+                disabled={busyKey === 'renameWs' || !wsName.trim()}>
+                {busyKey === 'renameWs' ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.saveBtnText}>Save</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Wipe-all-data confirmation */}
+      <ConfirmModal
+        visible={confirmWipe}
+        title="Delete all data?"
+        message={`Every entry, daily balance, proof file, approval, trash item and audit record in "${workspace?.name}" will be permanently deleted. Members and settings stay. This cannot be undone.`}
+        confirmLabel="Delete all data"
+        busy={busyKey === 'wipe'}
+        onCancel={() => setConfirmWipe(false)}
+        onConfirm={onWipeData}
+      />
+
       {/* Delete confirmation modal */}
       <Modal visible={confirmDelete} transparent animationType="fade" onRequestClose={() => setConfirmDelete(false)}>
         <View style={styles.modalBackdrop}>
@@ -529,6 +729,13 @@ const makeStyles = (t) => StyleSheet.create({
   approvalText: { fontSize: 14, color: t.colors.text, fontWeight: '600' },
   currencyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: t.spacing(2), marginTop: t.spacing(3) },
   workspaceLinks: { flexDirection: 'row', gap: t.spacing(5), marginTop: t.spacing(2) },
+  balanceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: t.spacing(2),
+  },
+  balanceValue: { fontSize: 15, fontWeight: '700', color: t.colors.text },
   label: { fontSize: 13, fontWeight: '600', color: t.colors.textMuted, marginBottom: t.spacing(2) },
   saveBtn: { backgroundColor: t.colors.primary, borderRadius: t.radius.md, paddingHorizontal: t.spacing(5), paddingVertical: t.spacing(3), minWidth: 96, alignItems: 'center' },
   saveBtnText: { color: '#fff', fontWeight: '700' },

@@ -3,6 +3,7 @@ import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '@/hooks/useTheme';
 
 const OPTIONS = [
+  { key: 'preview', label: 'Preview', hint: 'See the PDF before downloading' },
   { key: 'csv', label: 'CSV', hint: 'Spreadsheet-compatible plain text' },
   { key: 'xlsx', label: 'Excel (.xlsx)', hint: 'Formatted workbook' },
   { key: 'pdf', label: 'PDF', hint: 'Styled report, same layout as on screen' },

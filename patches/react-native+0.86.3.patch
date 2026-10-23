@@ -1,0 +1,285 @@
+diff --git a/node_modules/react-native/ReactCommon/react/renderer/core/graphicsConversions.h b/node_modules/react-native/ReactCommon/react/renderer/core/graphicsConversions.h
+index 37fcc87..d3b8c2e 100644
+--- a/node_modules/react-native/ReactCommon/react/renderer/core/graphicsConversions.h
++++ b/node_modules/react-native/ReactCommon/react/renderer/core/graphicsConversions.h
+@@ -25,6 +25,7 @@
+ #include <react/renderer/graphics/Size.h>
+ 
+ #ifdef RN_SERIALIZABLE_STATE
++#include <folly/Format.h>
+ #include <yoga/Yoga.h>
+ #endif
+ 
+@@ -68,7 +69,7 @@ inline folly::dynamic toDynamic(const YGValue &dimension)
+     case YGUnitPoint:
+       return dimension.value;
+     case YGUnitPercent:
+-      return std::format("{}%", dimension.value);
++      return folly::sformat("{}%", dimension.value);
+   }
+ 
+   return nullptr;
+@@ -99,17 +100,13 @@ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue
+ 
+   react_native_expect(value.hasType<std::vector<Float>>());
+   if (value.hasType<std::vector<Float>>()) {
+-    auto array = (std::vector<Float>)value;
+-    react_native_expect(array.size() == 2);
+-    if (array.size() >= 2) {
+-      result = {.x = array.at(0), .y = array.at(1)};
+-    } else {
+-      result = {.x = 0, .y = 0};
+-      LOG(ERROR) << "Unsupported Point vector size: " << array.size();
+-    }
+-  } else {
+-    LOG(ERROR) << "Unsupported Point type";
++    auto items = (std::vector<Float>)value;
++    result.x = items[0];
++    result.y = items[1];
++    return;
+   }
++
++  abort();
+ }
+ 
+ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue &value, Size &result)
+@@ -121,9 +118,6 @@ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue
+         result.width = pair.second;
+       } else if (pair.first == "height") {
+         result.height = pair.second;
+-      } else {
+-        LOG(ERROR) << "Unsupported Size map key: " << pair.first;
+-        react_native_expect(false);
+       }
+     }
+     return;
+@@ -131,24 +125,54 @@ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue
+ 
+   react_native_expect(value.hasType<std::vector<Float>>());
+   if (value.hasType<std::vector<Float>>()) {
+-    auto array = (std::vector<Float>)value;
+-    react_native_expect(array.size() == 2);
+-    if (array.size() >= 2) {
+-      result = {.width = array.at(0), .height = array.at(1)};
+-    } else {
+-      result = {.width = 0, .height = 0};
+-      LOG(ERROR) << "Unsupported Size vector size: " << array.size();
++    auto items = (std::vector<Float>)value;
++    result.width = items[0];
++    result.height = items[1];
++    return;
++  }
++
++  abort();
++}
++
++inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue &value, Rect &result)
++{
++  if (value.hasType<std::unordered_map<std::string, Float>>()) {
++    auto map = (std::unordered_map<std::string, Float>)value;
++    for (const auto &pair : map) {
++      if (pair.first == "x") {
++        result.origin.x = pair.second;
++      } else if (pair.first == "y") {
++        result.origin.y = pair.second;
++      } else if (pair.first == "width") {
++        result.size.width = pair.second;
++      } else if (pair.first == "height") {
++        result.size.height = pair.second;
++      }
+     }
+-  } else {
+-    LOG(ERROR) << "Unsupported Size type";
++    return;
+   }
++
++  react_native_expect(value.hasType<std::vector<Float>>());
++  if (value.hasType<std::vector<Float>>()) {
++    auto items = (std::vector<Float>)value;
++    result.origin.x = items[0];
++    result.origin.y = items[1];
++    result.size.width = items[2];
++    result.size.height = items[3];
++    return;
++  }
++
++  abort();
+ }
+ 
+ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue &value, EdgeInsets &result)
+ {
+   if (value.hasType<Float>()) {
+     auto number = (Float)value;
+-    result = {.left = number, .top = number, .right = number, .bottom = number};
++    result.left = number;
++    result.top = number;
++    result.right = number;
++    result.bottom = number;
+     return;
+   }
+ 
+@@ -163,9 +187,6 @@ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue
+         result.bottom = pair.second;
+       } else if (pair.first == "right") {
+         result.right = pair.second;
+-      } else {
+-        LOG(ERROR) << "Unsupported EdgeInsets map key: " << pair.first;
+-        react_native_expect(false);
+       }
+     }
+     return;
+@@ -173,36 +194,65 @@ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue
+ 
+   react_native_expect(value.hasType<std::vector<Float>>());
+   if (value.hasType<std::vector<Float>>()) {
+-    auto array = (std::vector<Float>)value;
+-    react_native_expect(array.size() == 4);
+-    if (array.size() >= 4) {
+-      result = {.left = array.at(0), .top = array.at(1), .right = array.at(2), .bottom = array.at(3)};
+-    } else {
+-      result = {.left = 0, .top = 0, .right = 0, .bottom = 0};
+-      LOG(ERROR) << "Unsupported EdgeInsets vector size: " << array.size();
+-    }
+-  } else {
+-    LOG(ERROR) << "Unsupported EdgeInsets type";
++    auto items = (std::vector<Float>)value;
++    result.top = items[0];
++    result.left = items[1];
++    result.bottom = items[2];
++    result.right = items[3];
++    return;
+   }
++
++  abort();
+ }
+ 
+-#ifdef RN_SERIALIZABLE_STATE
+-inline folly::dynamic toDynamic(const EdgeInsets &edgeInsets)
++inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue &value, RectangleEdges<Float> &result)
+ {
+-  folly::dynamic edgeInsetsResult = folly::dynamic::object();
+-  edgeInsetsResult["left"] = edgeInsets.left;
+-  edgeInsetsResult["top"] = edgeInsets.top;
+-  edgeInsetsResult["right"] = edgeInsets.right;
+-  edgeInsetsResult["bottom"] = edgeInsets.bottom;
+-  return edgeInsetsResult;
++  if (value.hasType<Float>()) {
++    auto number = (Float)value;
++    result.left = number;
++    result.top = number;
++    result.right = number;
++    result.bottom = number;
++    return;
++  }
++
++  if (value.hasType<std::unordered_map<std::string, Float>>()) {
++    auto map = (std::unordered_map<std::string, Float>)value;
++    for (const auto &pair : map) {
++      if (pair.first == "top") {
++        result.top = pair.second;
++      } else if (pair.first == "left") {
++        result.left = pair.second;
++      } else if (pair.first == "bottom") {
++        result.bottom = pair.second;
++      } else if (pair.first == "right") {
++        result.right = pair.second;
++      }
++    }
++    return;
++  }
++
++  react_native_expect(value.hasType<std::vector<Float>>());
++  if (value.hasType<std::vector<Float>>()) {
++    auto items = (std::vector<Float>)value;
++    result.top = items[0];
++    result.left = items[1];
++    result.bottom = items[2];
++    result.right = items[3];
++    return;
++  }
++
++  abort();
+ }
+-#endif
+ 
+-inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue &value, CornerInsets &result)
++inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue &value, RectangleCorners<Float> &result)
+ {
+   if (value.hasType<Float>()) {
+     auto number = (Float)value;
+-    result = {.topLeft = number, .topRight = number, .bottomLeft = number, .bottomRight = number};
++    result.topLeft = number;
++    result.topRight = number;
++    result.bottomLeft = number;
++    result.bottomRight = number;
+     return;
+   }
+ 
+@@ -217,9 +267,6 @@ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue
+         result.bottomLeft = pair.second;
+       } else if (pair.first == "bottomRight") {
+         result.bottomRight = pair.second;
+-      } else {
+-        LOG(ERROR) << "Unsupported CornerInsets map key: " << pair.first;
+-        react_native_expect(false);
+       }
+     }
+     return;
+@@ -227,50 +274,15 @@ inline void fromRawValue(const PropsParserContext & /*context*/, const RawValue
+ 
+   react_native_expect(value.hasType<std::vector<Float>>());
+   if (value.hasType<std::vector<Float>>()) {
+-    auto array = (std::vector<Float>)value;
+-    react_native_expect(array.size() == 4);
+-    if (array.size() >= 4) {
+-      result = {.topLeft = array.at(0), .topRight = array.at(1), .bottomLeft = array.at(2), .bottomRight = array.at(3)};
+-    } else {
+-      LOG(ERROR) << "Unsupported CornerInsets vector size: " << array.size();
+-    }
++    auto items = (std::vector<Float>)value;
++    result.topLeft = items[0];
++    result.topRight = items[1];
++    result.bottomLeft = items[2];
++    result.bottomRight = items[3];
++    return;
+   }
+ 
+-  // Error case - we should only here if all other supported cases fail
+-  // In dev we would crash on assert before this point
+-  result = {.topLeft = 0, .topRight = 0, .bottomLeft = 0, .bottomRight = 0};
+-  LOG(ERROR) << "Unsupported CornerInsets type";
++  abort();
+ }
+ 
+-#if RN_DEBUG_STRING_CONVERTIBLE
+-
+-inline std::string toString(const Point &point)
+-{
+-  return "{" + toString(point.x) + ", " + toString(point.y) + "}";
+-}
+-
+-inline std::string toString(const Size &size)
+-{
+-  return "{" + toString(size.width) + ", " + toString(size.height) + "}";
+-}
+-
+-inline std::string toString(const Rect &rect)
+-{
+-  return "{" + toString(rect.origin) + ", " + toString(rect.size) + "}";
+-}
+-
+-inline std::string toString(const EdgeInsets &edgeInsets)
+-{
+-  return "{" + toString(edgeInsets.left) + ", " + toString(edgeInsets.top) + ", " + toString(edgeInsets.right) + ", " +
+-      toString(edgeInsets.bottom) + "}";
+-}
+-
+-inline std::string toString(const CornerInsets &cornerInsets)
+-{
+-  return "{" + toString(cornerInsets.topLeft) + ", " + toString(cornerInsets.topRight) + ", " +
+-      toString(cornerInsets.bottomLeft) + ", " + toString(cornerInsets.bottomRight) + "}";
+-}
+-
+-#endif
+-
+ } // namespace facebook::react
